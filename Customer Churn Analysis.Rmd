@@ -15,6 +15,7 @@ library(rmarkdown) #used for formatting the markdown file
 library(lubridate) #Used for manipulating dates
 
 library(glmnet)
+library(caret)
 library(rpart) #used for classification trees
 library(rpart.plot) #used for plotting the trees
 library(ROCR) #used for evaluating tree performance
@@ -61,7 +62,7 @@ There is high correlation in these two variables. Moving ahead, we will be using
 
 **The tenure column can be clubbed together to reduce the number of levels.**
 ```{r}
-telecom <- telecom.raw %>%
+telecom.raw2 <- telecom.raw %>%
   mutate(tenure.new = as.factor(case_when(tenure >= 0 & tenure < 12 ~ '0-12 Months',
                                    tenure >= 12 & tenure < 24 ~ '12-24 Months',
                                    tenure >= 24 & tenure < 36 ~ '24-36 Months',
@@ -70,15 +71,33 @@ telecom <- telecom.raw %>%
                                    TRUE ~ '>60 Months'))) %>% 
   select(-c(tenure,TotalCharges))
 
-head(telecom)
+head(telecom.raw2)
 ```
 
 
 
 **Checking the summary statistics**
 ```{r}
-summary(telecom)
+summary(telecom.raw2)
 ```
+
+There are entries of `No Internet Connection` in columns like `OnlineSecurity`, `OnlineBackup`, `DeviceProtection`, `TechSupport`, `StreamingTV`, `StreamingMovies`. We will merge them with `No` to reduce unnecessary levels.
+
+
+
+```{r}
+factorrenames <- names(telecom.raw2[8:14])
+  
+telecom <- telecom.raw2 %>%
+        mutate_at(.vars=factorrenames,
+                  .funs=~recode_factor(., `No internet service`="No")) %>%
+        mutate_at(.vars="MultipleLines",
+                  .funs=~recode_factor(., `No phone service`="No"))
+  
+
+str(telecom)
+```
+
 
 Distribution of Monthly Charges
 ```{r}
@@ -180,7 +199,8 @@ telecom_train.Y = telecom_train[, "churn"]
 telecom_test.Y = telecom_test[, "churn"]
 
 
-credit.lasso<- glmnet(x=credit.train.X, y=credit.train.Y, family = "binomial")
+credit.lasso<- glmnet(x=telecom_train.X, y=telecom_train.Y, family = "binomial")
+
 credit.lasso.cv<- cv.glmnet(x=credit.train.X, y=credit.train.Y, family = "binomial", 
                             type.measure = "class")
 plot(credit.lasso.cv)
@@ -190,19 +210,5 @@ coef(credit.lasso.cv, s=credit.lasso.cv$lambda.min)
 ```
 
 
-```{r}
-install.packages("FactoMineR")
-```
 
-```{r}
-library(FactoMineR)
-```
-
-```{r}
-telecom_pca <- FAMD(telecom,ncp = 25,sup.var = 19,graph = FALSE)
-```
-
-```{r}
-telecom_pca
-```
 
