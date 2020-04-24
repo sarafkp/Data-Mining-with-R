@@ -14,7 +14,7 @@ library(tidyverse) #used for data manipulation
 library(rmarkdown) #used for formatting the markdown file
 library(lubridate) #Used for manipulating dates
 
-
+library(glmnet)
 library(rpart) #used for classification trees
 library(rpart.plot) #used for plotting the trees
 library(ROCR) #used for evaluating tree performance
@@ -139,7 +139,7 @@ Changing the `Churn` values to 1 and 0
 ```{r}
 telecom$churn <- ifelse(telecom$Churn=='Yes',1,0)
 
-telecom <- telecom %>% select(-Churn)
+telecom <- telecom %>% select(-c(Churn,customerID))
 ```
 
 
@@ -153,15 +153,56 @@ telecom_test<-telecom[-sample_index,]
 
 
 **Logistic regression**
+
+Model with all the variables
 ```{r}
+fullmodel<-lm(churn~., data = telecom_train )
+summary(fullmodel)
+```
 
+Stepwise Regression
+```{r}
 nullmodel<-lm(churn~1, data = telecom_train )
-
-summary(nullmodel)
-
-fullmodel<-lm(Churn~., data = telecom_train )
 
 model_step_both<-step(nullmodel,
                       scope=list(lower=nullmodel,upper=fullmodel),
                       direction = 'forward')
+
+summary(model_step_both)
 ```
+
+
+## LASSO variable selection
+```{r}
+telecom_train.X = as.matrix(select(telecom_train, -churn))
+telecom_test.X = as.matrix(select(telecom_test, -churn))
+telecom_train.Y = telecom_train[, "churn"]
+telecom_test.Y = telecom_test[, "churn"]
+
+
+credit.lasso<- glmnet(x=credit.train.X, y=credit.train.Y, family = "binomial")
+credit.lasso.cv<- cv.glmnet(x=credit.train.X, y=credit.train.Y, family = "binomial", 
+                            type.measure = "class")
+plot(credit.lasso.cv)
+credit.lasso.cv$lambda.min
+
+coef(credit.lasso.cv, s=credit.lasso.cv$lambda.min)
+```
+
+
+```{r}
+install.packages("FactoMineR")
+```
+
+```{r}
+library(FactoMineR)
+```
+
+```{r}
+telecom_pca <- FAMD(telecom,ncp = 25,sup.var = 19,graph = FALSE)
+```
+
+```{r}
+telecom_pca
+```
+
