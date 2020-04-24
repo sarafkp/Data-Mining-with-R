@@ -7,6 +7,9 @@ output: html_document
 
 
 ```{r}
+
+set.seed(1357)
+
 library(tidyverse) #used for data manipulation
 library(rmarkdown) #used for formatting the markdown file
 library(lubridate) #Used for manipulating dates
@@ -132,3 +135,12 @@ ggplot(data = telecom,aes(PaymentMethod,fill = (Churn))) +
 * The number of customers in each type of payment method is alsomst similar
 * There is high churn in customers with `Electronic Check` payment method
 
+
+# Modelling
+
+**Train and Test Datasets**
+```{r}
+sample_index<-sample(nrow(telecom),nrow(telecom)*0.9)
+telecom_train<-telecom[sample_index,]
+telecom_test<-telecom[-sample_index,]
+```
