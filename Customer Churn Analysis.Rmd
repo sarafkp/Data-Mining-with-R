@@ -75,9 +75,6 @@ head(telecom)
 
 
 
-
-
-
 **Checking the summary statistics**
 ```{r}
 summary(telecom)
@@ -138,9 +135,33 @@ ggplot(data = telecom,aes(PaymentMethod,fill = (Churn))) +
 
 # Modelling
 
+Changing the `Churn` values to 1 and 0
+```{r}
+telecom$churn <- ifelse(telecom$Churn=='Yes',1,0)
+
+telecom <- telecom %>% select(-Churn)
+```
+
+
 **Train and Test Datasets**
 ```{r}
 sample_index<-sample(nrow(telecom),nrow(telecom)*0.9)
 telecom_train<-telecom[sample_index,]
 telecom_test<-telecom[-sample_index,]
+```
+
+
+
+**Logistic regression**
+```{r}
+
+nullmodel<-lm(churn~1, data = telecom_train )
+
+summary(nullmodel)
+
+fullmodel<-lm(Churn~., data = telecom_train )
+
+model_step_both<-step(nullmodel,
+                      scope=list(lower=nullmodel,upper=fullmodel),
+                      direction = 'forward')
 ```
