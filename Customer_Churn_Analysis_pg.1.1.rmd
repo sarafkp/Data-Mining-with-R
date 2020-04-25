@@ -1,0 +1,694 @@
+---
+title: "Customer Churn Analysis"
+author: "Pratik Gundawade"
+date: "4/24/2020"
+output: html_document
+---
+
+# Libraries
+
+```{r, warning=FALSE,message=FALSE}
+
+set.seed(1357)
+
+library(tidyverse) #used for data manipulation
+library(rmarkdown) #used for formatting the markdown file
+library(lubridate) #Used for manipulating dates
+library(dplyr) # for data wrangling
+library(ggplot2) # for plotting awesome graphics
+library(plotly) # for making the graphics interactive
+library(randomForest) # for bagging tree
+library(glmnet)
+library(caret)
+library(rpart) #used for classification trees
+library(rpart.plot) #used for plotting the trees
+library(ROCR) #used for evaluating tree performance
+library(ipred)
+library(party)
+library(xgboost)
+library(nnet)
+library(naivebayes)
+library(rattle) #used for plotting trees
+library(FactoMineR) #for PCA
+library(factoextra) #for PCA
+```
+
+# Reading Dataset
+
+**Importing the dataset**
+```{r}
+telecom.raw <- read.csv("Cust_Churn_Telecom.csv")
+```
+
+# Data Inspection
+
+**Data Inspection**
+```{r}
+str(telecom.raw)
+```
+
+The `SeniorCitizen` is stored as integer. Post investigating the unique values, its should be stored as factor.
+Similarly, `customerID` should not be a factor but stored as a string
+
+```{r}
+unique(telecom.raw$SeniorCitizen)
+length(unique(telecom.raw$tenure))
+
+telecom.raw$SeniorCitizen <- as.factor(telecom.raw$SeniorCitizen)
+telecom.raw$customerID <- as.character(telecom.raw$customerID)
+telecom.raw$tenure <- as.numeric(telecom.raw$tenure)
+```
+
+**Checking `null` values in all the columns**
+```{r}
+colSums(is.na(telecom.raw))
+```
+
+**Correlation across variables**
+```{r}
+tel.cor.check <- telecom.raw[!is.na(telecom.raw$TotalCharges),]
+
+corr.matrix <- cor(tel.cor.check[,c('MonthlyCharges','TotalCharges')])
+corr.matrix
+```
+There is high correlation in these two variables. Moving ahead, we will be using `MonthlyCharges` column and drop `TotalCharges`
+
+
+
+**The tenure column can be clubbed together to reduce the number of levels.**
+```{r}
+telecom.raw2 <- telecom.raw %>%
+  mutate(tenure.new = as.factor(case_when(tenure >= 0 & tenure < 12 ~ '0-12 Months',
+                                   tenure >= 12 & tenure < 24 ~ '12-24 Months',
+                                   tenure >= 24 & tenure < 36 ~ '24-36 Months',
+                                   tenure >= 36 & tenure < 48 ~ '36-48 Months',
+                                   tenure >= 48 & tenure < 60 ~ '48-60 Months',
+                                   TRUE ~ '>60 Months'))) %>% 
+  select(-c(tenure,TotalCharges))
+
+#head(telecom.raw2)
+```
+
+
+
+**Checking the summary statistics**
+```{r}
+summary(telecom.raw2)
+```
+
+There are entries of `No Internet Connection` in columns like `OnlineSecurity`, `OnlineBackup`, `DeviceProtection`, `TechSupport`, `StreamingTV`, `StreamingMovies`. We will merge them with `No` to reduce unnecessary levels.
+
+
+
+```{r}
+factorrenames <- names(telecom.raw2[8:14])
+  
+telecom <- telecom.raw2 %>%
+        mutate_at(.vars=factorrenames,
+                  .funs=~recode_factor(., `No internet service`="No")) %>%
+        mutate_at(.vars="MultipleLines",
+                  .funs=~recode_factor(., `No phone service`="No"))
+  
+
+#glimpse(telecom)
+```
+
+
+Distribution of Monthly Charges
+```{r}
+hist(telecom$MonthlyCharges, prob = T, col = "grey", breaks = 10, main = "Histogram of Monthly Charges", xlab = "Monthly Charges")
+```
+* There are high number of customers with monthly charges les sthan $ 30
+* At the same time, we can see that the number of customers in the buckets of monthly charges greater tha 70 is high and constant across buckets till $ 110
+
+
+Outlier in Monthly Charges
+```{r}
+boxplot(telecom$MonthlyCharges,main = "Boxplot : Monthly Charges")
+```
+There are no outliers in the monthly charges column
+
+
+# EDA
+
+**Analyzing Churn Rate across gender**
+```{r}
+ggplot(data = telecom,aes(gender,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Gender") +
+  ggtitle("Churn across Gender") +
+  labs(fill = 'Churn')
+```
+The total customers is slightky higher in the male bucket with slight increment in churned customers
+
+**Analyzing Churn Rate across age of the customer**
+```{r}
+ggplot(data = telecom,aes(SeniorCitizen,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Senior Citizen Type") +
+  ggtitle("Churn across Senior Citizen Variable") +
+  labs(fill = 'Churn')
+```
+The churn rate seems high in Senior Citizens even tough the number of customers in this bucket is pretty low
+
+**Analyzing Churn Rate across the payment methods**
+```{r}
+ggplot(data = telecom,aes(PaymentMethod,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Payment Method") +
+  ggtitle("Churn across Payment Method") +
+  labs(fill = 'Churn')
+```
+
+* The number of customers in each type of payment method is alsomst similar
+* There is high churn in customers with `Electronic Check` payment method
+
+
+# Models without PCA
+
+Removing the `customerID` from the dataset
+```{r}
+telecom <- telecom %>% select(-customerID)
+```
+
+
+Splitting the data into training and test set with 80-20 split
+```{r}
+set.seed(1357)
+sample_index<-sample(nrow(telecom),nrow(telecom)*0.8)
+telecom.train<-telecom[sample_index,]
+telecom.test<-telecom[-sample_index,]
+```
+
+## Defining the model evaluation parameters
+```{r}
+control <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = twoClassSummary, # This uses ROC as model eveluation parameter
+  classProbs = TRUE,
+  verboseIter = FALSE,
+  search = "grid",
+  savePredictions = TRUE
+)
+```
+
+```{r}
+control1 <- trainControl(
+  method = "oob",
+  number = 5,
+  summaryFunction = twoClassSummary, # This uses ROC as model eveluation parameter
+  classProbs = TRUE,
+  verboseIter = FALSE,
+  search = "grid",
+  savePredictions = TRUE
+)
+```
+
+## Fitting bagging tree model
+
+
+```{r}
+bagg_model.telecom <- train(Churn ~ ., data = telecom.train,
+                   method='treebag', 
+                   trControl = control1,
+                   keepX = T)
+
+bagg_pred <- predict(bagg_model.telecom, newdata = telecom.test)
+
+```
+  
+```{r}
+
+baggcm <- confusionMatrix(bagg_pred, telecom.test[["Churn"]])
+baggcm
+
+```
+
+```{r}
+baggaccuracy <- baggcm$overall[c(1,3,4)]
+baggaccuracy
+```
+
+
+```{r}
+pred.bagg.train<- predict(bagg_model.telecom, newdata = telecom.train)
+MR.bagg.in <-mean((telecom.train$Churn != pred.bagg.train)*1)
+
+pred.bagg.test<- predict(bagg_model.telecom, newdata = telecom.test)
+MR.bagg.out <-mean((telecom.test$Churn != pred.bagg.test)*1)
+
+
+MR.bagg.in;
+MR.bagg.out
+```
+
+### ROC Curve for the bagging model
+
+```{r}
+pred_bagg <- prediction(predictions = as.numeric(pred.bagg.test), as.numeric(telecom.test$Churn))
+
+perf_bagg <- performance(pred_bagg,"tpr","fpr")
+
+plot(perf_bagg,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+
+```{r}
+unlist(slot(performance(pred_bagg, 'auc'), "y.values"))
+```
+
+## Fitting Random Forest tree model
+
+```{r}
+rf_model.telecom <- train(Churn ~ ., data = telecom.train,
+                   method='rf', 
+                   trControl = control1)
+
+rf_pred <- predict(rf_model.telecom, newdata = telecom.test)
+
+rfcm <- confusionMatrix(rf_pred, telecom.test[["Churn"]])
+rfcm
+
+```
+
+```{r}
+rfaccuracy <- rfcm$overall[c(1,3,4)]
+rfaccuracy
+```
+
+```{r}
+pred.rf.train<- predict(rf_model.telecom)
+MR.rf.in <-mean((telecom.train$Churn != pred.rf.train)*1)
+
+pred.rf.test <- predict(rf_model.telecom, newdata = telecom.test)
+MR.rf.out <- mean((telecom.test$Churn != pred.rf.test)*1)
+
+
+MR.rf.in;
+MR.rf.out
+```
+
+### ROC Curve for the bagging model
+```{r}
+
+pred_rf <- prediction(predictions = as.numeric(pred.rf.test), as.numeric(telecom.test$Churn))
+
+perf_rf <- performance(pred_rf,"tpr","fpr")
+
+plot(perf_rf,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+
+```{r}
+unlist(slot(performance(pred_rf, 'auc'), "y.values"))
+```
+
+## Fitting Gradient Boosting
+
+```{r}
+gb_model.telecom <- train(Churn ~ ., data = telecom.train,
+                   method='xgbTree',
+                   trControl = control)
+
+
+gb_pred <- predict(gb_model.telecom, newdata = telecom.test)
+
+gbcm <- confusionMatrix(gb_pred, telecom.test[["Churn"]])
+gbcm
+
+
+```
+
+```{r}
+gbaccuracy <- gbcm$overall[c(1,3,4)]
+gbaccuracy
+```
+
+```{r}
+
+pred.gb.train<- predict(gb_model.telecom, newdata = telecom.train)
+MR.gb.in <-mean((telecom.train$Churn != pred.gb.train)*1)
+
+pred.gb.test<- predict(gb_model.telecom, newdata = telecom.test)
+MR.gb.out <- mean((telecom.test$Churn != pred.gb.test)*1)
+
+
+MR.gb.in;
+MR.gb.out
+```
+
+### ROC Curve for the gradient boosting model
+
+```{r}
+
+pred_gb <- prediction(predictions = as.numeric(pred.gb.test), as.numeric(telecom.test$Churn))
+
+perf_gb <- performance(pred_gb,"tpr","fpr")
+
+plot(perf_gb,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+```{r}
+unlist(slot(performance(pred_gb, 'auc'), "y.values"))
+```
+
+## Naive Bayes
+
+```{r, warning=FALSE, message=FALSE}
+
+nb_model.telecom <- train(Churn ~ ., data = telecom.train,
+                    method='naive_bayes',
+                    trControl = control)
+nb_pred <- predict(nb_model.telecom, newdata = telecom.test)
+
+nbcm <- confusionMatrix(nb_pred, telecom.test[["Churn"]])
+nbcm
+#summary(bagg_model.telecom)
+#bagg_model.telecom
+
+```
+
+```{r}
+pred.nb.train<- predict(nb_model.telecom)
+MR.nb.in <-mean((telecom.train$Churn != pred.nb.train)*1)
+
+pred.nb.test<- predict(gb_model.telecom, newdata = telecom.test)
+MR.nb.out <- mean((telecom.test$Churn != pred.nb.test)*1)
+
+
+MR.nb.in;
+MR.nb.out
+
+```
+### ROC Curve for the gradient boosting model
+
+```{r}
+
+pred_nb <- prediction(predictions = as.numeric(pred.nb.test), as.numeric(telecom.test$Churn))
+
+perf_nb <- performance(pred_nb,"tpr","fpr")
+
+plot(perf_nb,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+```{r}
+unlist(slot(performance(pred_nb, 'auc'), "y.values"))
+```
+
+
+
+# Models With PCA
+## PCA
+
+```{r}
+telecom_pca <- FAMD(telecom,ncp = 25,graph = FALSE,sup.var = 18)
+```
+
+
+```{r}
+fviz_screeplot(telecom_pca, ncp=25)
+```
+
+```{r}
+get_eigenvalue(telecom_pca)
+```
+
+```{r}
+telecom_prin_comp <- telecom_pca$ind$contrib[,1:15]
+```
+
+```{r}
+telecom_pca_train <- as.data.frame(cbind(telecom_prin_comp[sample_index,],as.character(telecom[sample_index,"Churn"])))
+```
+
+```{r}
+telecom_pca_test <- as.data.frame(cbind(telecom_prin_comp[-sample_index,],as.character(telecom[-sample_index,"Churn"])))
+```
+
+```{r}
+colnames(telecom_pca_train) <- c("Dim.1","Dim.2","Dim.3","Dim.4","Dim.5","Dim.6","Dim.7",
+                                 "Dim.8","Dim.9","Dim.10","Dim.11","Dim.12","Dim.13","Dim.14","Dim.15",
+                                 "Churn")
+
+telecom_pca_train$Dim.1 <- as.numeric(telecom_pca_train$Dim.1)
+telecom_pca_train$Dim.2 <- as.numeric(telecom_pca_train$Dim.2)
+telecom_pca_train$Dim.3 <- as.numeric(telecom_pca_train$Dim.3)
+telecom_pca_train$Dim.4 <- as.numeric(telecom_pca_train$Dim.4)
+telecom_pca_train$Dim.5 <- as.numeric(telecom_pca_train$Dim.5)
+telecom_pca_train$Dim.6 <- as.numeric(telecom_pca_train$Dim.6)
+telecom_pca_train$Dim.7 <- as.numeric(telecom_pca_train$Dim.7)
+telecom_pca_train$Dim.8 <- as.numeric(telecom_pca_train$Dim.8)
+telecom_pca_train$Dim.9 <- as.numeric(telecom_pca_train$Dim.9)
+telecom_pca_train$Dim.10 <- as.numeric(telecom_pca_train$Dim.10)
+telecom_pca_train$Dim.11 <- as.numeric(telecom_pca_train$Dim.11)
+telecom_pca_train$Dim.12 <- as.numeric(telecom_pca_train$Dim.12)
+telecom_pca_train$Dim.13 <- as.numeric(telecom_pca_train$Dim.13)
+telecom_pca_train$Dim.14 <- as.numeric(telecom_pca_train$Dim.14)
+telecom_pca_train$Dim.15 <- as.numeric(telecom_pca_train$Dim.15)
+
+```
+
+```{r}
+colnames(telecom_pca_test) <- c("Dim.1","Dim.2","Dim.3","Dim.4","Dim.5","Dim.6","Dim.7",
+                                "Dim.8","Dim.9","Dim.10","Dim.11","Dim.12","Dim.13","Dim.14","Dim.15",
+                                "Churn")
+
+telecom_pca_test$Dim.1 <- as.numeric(telecom_pca_test$Dim.1)
+telecom_pca_test$Dim.2 <- as.numeric(telecom_pca_test$Dim.2)
+telecom_pca_test$Dim.3 <- as.numeric(telecom_pca_test$Dim.3)
+telecom_pca_test$Dim.4 <- as.numeric(telecom_pca_test$Dim.4)
+telecom_pca_test$Dim.5 <- as.numeric(telecom_pca_test$Dim.5)
+telecom_pca_test$Dim.6 <- as.numeric(telecom_pca_test$Dim.6)
+telecom_pca_test$Dim.7 <- as.numeric(telecom_pca_test$Dim.7)
+telecom_pca_test$Dim.8 <- as.numeric(telecom_pca_test$Dim.8)
+telecom_pca_test$Dim.9 <- as.numeric(telecom_pca_test$Dim.9)
+telecom_pca_test$Dim.10 <- as.numeric(telecom_pca_test$Dim.10)
+telecom_pca_test$Dim.11 <- as.numeric(telecom_pca_test$Dim.11)
+telecom_pca_test$Dim.12 <- as.numeric(telecom_pca_test$Dim.12)
+telecom_pca_test$Dim.13 <- as.numeric(telecom_pca_test$Dim.13)
+telecom_pca_test$Dim.14 <- as.numeric(telecom_pca_test$Dim.14)
+telecom_pca_test$Dim.15 <- as.numeric(telecom_pca_test$Dim.15)
+```
+
+```{r}
+#head(telecom_pca_train)
+```
+
+```{r}
+#head(telecom_pca_test)
+```
+
+
+
+## Fitting bagging tree model (PCA)
+
+
+```{r}
+pca_bagg_model.telecom <- train(Churn ~ ., data = telecom_pca_train,
+                   method='treebag', 
+                   trControl = control1,
+                   keepX = T)
+
+pca_bagg_pred <- predict(pca_bagg_model.telecom, newdata = telecom_pca_test)
+
+#fancyRpartPlot(bagg_model.telecom$finalModel)
+
+```
+  
+```{r}
+
+pca_baggcm <- confusionMatrix(pca_bagg_pred, telecom_pca_test[["Churn"]])
+pca_baggcm
+#summary(bagg_model.telecom)
+#bagg_model.telecom
+
+```
+
+```{r}
+pca_baggaccuracy <- pca_baggcm$overall[c(1,3,4)]
+pca_baggaccuracy
+```
+
+
+```{r}
+pca_pred.bagg.train<- predict(pca_bagg_model.telecom, newdata = telecom_pca_train)
+pca_MR.bagg.in <-mean((telecom_pca_train$Churn != pca_pred.bagg.train)*1)
+
+pca_pred.bagg.test<- predict(pca_bagg_model.telecom, newdata = telecom_pca_test)
+pca_MR.bagg.out <-mean((telecom_pca_test$Churn != pca_pred.bagg.test)*1)
+
+
+pca_MR.bagg.in;
+pca_MR.bagg.out
+```
+
+### ROC Curve for the bagging model
+
+```{r}
+
+pca_pred_bagg <- prediction(predictions = as.numeric(pca_pred.bagg.test), as.numeric(telecom_pca_test$Churn))
+
+pca_perf_bagg <- performance(pca_pred_bagg,"tpr","fpr")
+
+plot(pca_perf_bagg,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+
+```{r}
+unlist(slot(performance(pred_bagg, 'auc'), "y.values"))
+```
+
+## Fitting Random Forest tree model (PCA)
+
+```{r}
+pca_rf_model.telecom <- train(Churn ~ ., data = telecom_pca_train,
+                   method='rf', 
+                   trControl = control1)
+
+pca_rf_pred <- predict(pca_rf_model.telecom, newdata = telecom_pca_test)
+
+pca_rfcm <- confusionMatrix(pca_rf_pred, telecom.test[["Churn"]])
+pca_rfcm
+
+
+```
+
+```{r}
+pca_rfaccuracy <- pca_rfcm$overall[c(1,3,4)]
+pca_rfaccuracy
+```
+
+```{r}
+pca_pred.rf.train<- predict(pca_rf_model.telecom, newdata = telecom_pca_train)
+pca_MR.rf.in <-mean((telecom_pca_train$Churn != pca_pred.rf.train)*1)
+
+pca_pred.rf.test <- predict(pca_rf_model.telecom, newdata = telecom_pca_test)
+pca_MR.rf.out <- mean((telecom_pca_test$Churn != pca_pred.rf.test)*1)
+
+
+pca_MR.rf.in;
+pca_MR.rf.out
+```
+
+### ROC Curve for the RandonForest model
+```{r}
+
+pca_pred_rf <- prediction(predictions = as.numeric(pca_pred.rf.test), as.numeric(telecom_pca_test$Churn))
+
+pca_perf_rf <- performance(pca_pred_rf,"tpr","fpr")
+
+plot(pca_perf_rf,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+
+```{r}
+unlist(slot(performance(pca_pred_rf, 'auc'), "y.values"))
+```
+
+## Fitting Gradient Boosting (PCA)
+
+```{r}
+pca_gb_model.telecom <- train(Churn ~ ., data = telecom_pca_train,
+                   method='xgbTree',
+                   trControl = control)
+
+
+pca_gb_pred <- predict(pca_gb_model.telecom, newdata = telecom_pca_test)
+
+pca_gbcm <- confusionMatrix(pca_gb_pred, telecom_pca_test[["Churn"]])
+pca_gbcm
+
+
+```
+
+```{r}
+pca_gbaccuracy <- pca_gbcm$overall[c(1,3,4)]
+pca_gbaccuracy
+```
+
+```{r}
+
+pca_pred.gb.train<- predict(pca_gb_model.telecom, newdata = telecom_pca_train)
+pca_MR.gb.in <-mean((telecom_pca_train$Churn != pca_pred.gb.train)*1)
+
+pca_pred.gb.test<- predict(pca_gb_model.telecom, newdata = telecom_pca_test)
+pca_MR.gb.out <- mean((telecom_pca_test$Churn != pca_pred.gb.test)*1)
+
+
+pca_MR.gb.in;
+pca_MR.gb.out
+```
+
+### ROC Curve for the gradient boosting model
+
+```{r}
+
+pca_pred_gb <- prediction(predictions = as.numeric(pca_pred.gb.test), as.numeric(telecom_pca_test$Churn))
+
+pca_perf_gb <- performance(pca_pred_gb,"tpr","fpr")
+
+plot(pca_perf_gb,colorize=TRUE)
+
+```
+
+**Area Under the curve**
+```{r}
+unlist(slot(performance(pca_pred_gb, 'auc'), "y.values"))
+```
+
+
+
+## Naive Bayes (PCA)
+
+```{r, warning=FALSE,message=FALSE}
+
+pca_nb_model.telecom <- train(Churn ~ ., data = telecom_pca_train,
+                    method='naive_bayes',
+                    trControl = control)
+pca_nb_pred <- predict(pca_nb_model.telecom, newdata = telecom_pca_test)
+
+pca_nbcm <- confusionMatrix(pca_nb_pred, telecom_pca_test[["Churn"]])
+pca_nbcm
+
+
+```
+
+```{r}
+pca_pred.nb.train<- predict(pca_nb_model.telecom, newdata = telecom_pca_train)
+pca_MR.nb.in <-mean((telecom_pca_train$Churn != pca_pred.nb.train)*1)
+
+pca_pred.nb.test<- predict(pca_gb_model.telecom, newdata = telecom_pca_test)
+pca_MR.nb.out <- mean((telecom_pca_test$Churn != pca_pred.nb.test)*1)
+
+
+pca_MR.nb.in;
+pca_MR.nb.out
+
+```
+### ROC Curve for the gradient boosting model
+
+```{r}
+
+pca_pred_nb <- prediction(predictions = as.numeric(pca_pred.nb.test), as.numeric(telecom_pca_test$Churn))
+
+pca_perf_nb <- performance(pca_pred_nb,"tpr","fpr")
+
+plot(pca_perf_nb,colorize=TRUE)
+
+```

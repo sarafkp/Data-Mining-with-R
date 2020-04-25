@@ -18,7 +18,6 @@ library(glmnet)
 library(caret)
 library(rpart) #used for classification trees
 library(rpart.plot) #used for plotting the trees
-library(rattle) #used for plotting trees
 library(ROCR) #used for evaluating tree performance
 ```
 
@@ -169,183 +168,220 @@ telecom.test<-telecom[-sample_index,]
 ```
 
 
-# Model 2
-
-Defining the model eveluation parameters
 ```{r}
-control <- trainControl(
-  method = "cv",
-  number = 5,
-  summaryFunction = twoClassSummary, # This uses ROC as model eveluation parameter
-  classProbs = TRUE,
-  verboseIter = FALSE,
-  search = "grid",
-  savePredictions = TRUE
-)
+library(e1071)
 ```
 
-Fitting logistic regression model
 ```{r}
-glm_model.telecom <- train(Churn ~ ., data = telecom.train,
-                   method="glm", 
-                   trControl = control)
-
-summary(glm_model.telecom)
-glm_model.telecom
+svm_model<-svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear")
 ```
 
 
-
-Model Eveluation: Insample
 ```{r}
-pred.glm.train<- predict(glm_model.telecom)
-MR.glm<-mean(telecom.train$Churn!=pred.glm.train)
+summary(svm_model)
+```
 
-pred <- prediction(as.numeric(pred.glm.train), as.numeric(telecom.train$Churn))
+```{r}
+svm_pred_train <- predict(svm_model, telecom.train)
+```
+
+```{r}
+mean(svm_pred_train == telecom.train$Churn)
+```
+
+```{r}
+svm_pred_test <- predict(svm_model,telecom.test)
+```
+
+
+```{r}
+mean(svm_pred_test == telecom.test$Churn)
+```
+
+# ROC Curve
+
+```{r}
+svm_pred_train<- predict(svm_model, telecom.train)
+MR.svm<-mean(telecom.train$Churn!=svm_pred_train)
+
+pred <- prediction(as.numeric(svm_pred_train), as.numeric(telecom.train$Churn))
 perf <- performance(pred,"tpr","fpr")
 plot(perf,colorize=TRUE)
-AUC.glm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+AUC.svm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
 ```
 
-Model Eveluation: Out of sample
 ```{r}
-pred.glm.test<- predict(glm_model.telecom,newdata = telecom.test)
+svm_pred_test<- predict(svm_model, telecom.test)
+MR.svm.test<-mean(telecom.test$Churn!=svm_pred_test)
 
-# Misclassification Rate
-MR.glm.out<-mean(telecom.test$Churn!=pred.glm.test)
-
-# AUC
-pred <- prediction(as.numeric(pred.glm.test), as.numeric(telecom.test$Churn))
+pred <- prediction(as.numeric(svm_pred_test), as.numeric(telecom.test$Churn))
 perf <- performance(pred,"tpr","fpr")
 plot(perf,colorize=TRUE)
-AUC.glm.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+AUC.svm.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
 
-# Confusion Metrics
-glm.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
+```{r}
+tune.svm <-svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear",cost = 10) 
+```
+
+  
+```{r}
+tune_out <-
+tune.svm(as.factor(Churn) ~., data=telecom.train,
+type = "C-classification", kernel = "linear",
+cost = 10^(-1:2), gamma = c(0.1,1,10), coef0 = c(0.1,1,10))
 ```
 
 
-# LASSO Variable Selection
-```{r}
-telecom.lasso <- train(Churn ~ ., data = telecom.train,
-  metric = "ROC",
-  method = "glmnet",
-  trControl = control,
-  preProcess = c("center","scale")
-)
 
-plot(telecom.lasso)
+```{r}
+tune_out$best.parameters$gamma
+```
+```{r}
+tune_out$best.parameters$coef0
+```
+```{r}
+tune_out$best.parameters$cost
 ```
 
-
-Get optimal value of alpha
 ```{r}
-telecom.lasso$bestTune$alpha
+
+
+svm_tune <- svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear",cost = 0.1,gamma =1,coef0 = 1) 
+
 ```
 
-Model Eveluation: Insample
 ```{r}
-pred.lasso.train<- predict(telecom.lasso)
-MR.lasso<-mean(telecom.train$Churn!=pred.lasso.train)
+svm_tune_pred <- predict(svm_tune,telecom.train)
+```
 
-pred <- prediction(as.numeric(pred.lasso.train), as.numeric(telecom.train$Churn))
+```{r}
+mean(telecom.train$Churn!=svm_tune_pred)
+```
+### Optimal SVM
+
+```{r}
+svm_optimal <- svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear",cost = 0.1,gamma =1,coef0 = 1) 
+```
+
+```{r}
+svm_pred_test_opt<- predict(svm_optimal, telecom.test)
+MR.svm.test.opt<-mean(telecom.test$Churn!=svm_pred_test_opt)
+
+pred <- prediction(as.numeric(svm_pred_test_opt), as.numeric(telecom.test$Churn))
 perf <- performance(pred,"tpr","fpr")
 plot(perf,colorize=TRUE)
-AUC.lasso.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
-```
-
-Model Eveluation: Out of sample
-```{r}
-pred.lasso.test<- predict(telecom.lasso,newdata = telecom.test)
-
-# Misclassification Rate
-MR.lasso.out<-mean(telecom.test$Churn!=pred.lasso.test)
-
-# AUC
-pred <- prediction(as.numeric(pred.lasso.test), as.numeric(telecom.test$Churn))
-perf <- performance(pred,"tpr","fpr")
-plot(perf,colorize=TRUE)
-AUC.lasso.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
-
-# Confusion Metrics
-lasso.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
-```
-
-
-(telecom.lasso)
-
-Extracting the variables and coeffecients from LASSO Regression
-```{r}
-#getting the coefficients of the final model
-coefficients <- coef(telecom.lasso$finalModel, telecom.lasso$bestTune$lambda)
-
-#create a list of the selected coefficients
-variables <- names(coefficients[which(coefficients != 0),])
-```
-
-# Classification Tree
-```{r}
-telecom.tree = train(Churn ~ ., data=telecom.train,
-                     metric = "ROC",
-                     method="rpart", 
-                  trControl = control)
+AUC.svm.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
 ```
 
 ```{r}
-fancyRpartPlot(telecom.tree$finalModel)
+MR.svm.test.opt
 ```
 
 
-Model Eveluation: Insample
+# PCA
+
 ```{r}
-pred.tree.train<- predict(telecom.tree)
-MR.tree<-mean(telecom.train$Churn!=pred.tree.train)
-
-pred <- prediction(as.numeric(pred.tree.train), as.numeric(telecom.train$Churn))
-perf <- performance(pred,"tpr","fpr")
-plot(perf,colorize=TRUE)
-AUC.tree.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+library(FactoMineR)
+library(factoextra)
 ```
 
-Model Eveluation: Out of sample
 ```{r}
-pred.tree.test<- predict(telecom.tree,newdata = telecom.test)
-
-# Misclassification Rate
-MR.tree.out<-mean(telecom.test$Churn!=pred.tree.test)
-
-# AUC
-pred <- prediction(as.numeric(pred.tree.test), as.numeric(telecom.test$Churn))
-perf <- performance(pred,"tpr","fpr")
-plot(perf,colorize=TRUE)
-AUC.tree.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
-
-# Confusion Metrics
-tree.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
+telecom_pca <- FAMD(telecom,ncp = 25,graph = FALSE,sup.var = 18)
 ```
 
-# K-S Chart 
+
 ```{r}
-ks=max(attr(perf,'y.values')[[1]]-attr(perf,'x.values')[[1]])
-plot(perf,main=paste0(' KS=',round(ks*100,1),'%'))
-lines(x = c(0,1),y=c(0,1))
-print(ks);
+fviz_screeplot(telecom_pca, ncp=25)
 ```
 
-
-K-S or Kolmogorov-Smirnov chart measures performance of classification models. More accurately, K-S is a measure of the degree of separation between the positive and negative distributions. The K-S is 100 if the scores partition the population into two separate groups in which one group contains all the positives and the other all the negatives. On the other hand, If the model cannot differentiate between positives and negatives, then it is as if the model selects cases randomly from the population. The K-S would be 0. In most classification models the K-S will fall between 0 and 100, and that the higher the value the better the model is at separating the positive from negative cases.
-
-
-
-# Lift Chart
 ```{r}
-pred = predict(telecom.tree, telecom.test, type = "prob")
-
-prediction.perf <-prediction(pred[,2],telecom.test$Churn)
-plot(performance(prediction.perf, measure="lift", x.measure="rpp"), colorize=TRUE)
+get_eigenvalue(telecom_pca)
 ```
 
-The lift chart shows how much more likely we are to receive positive responses than if we contact a random sample of customers. For example, by contacting only 10% of customers based on the predictive model we will reach 3 times as many respondents, as if we use no model.
+```{r}
+telecom_prin_comp <- telecom_pca$ind$contrib[,1:3]
+```
+
+```{r}
+telecom_pca_train <- as.data.frame(cbind(telecom_prin_comp[sample_index,],as.character(telecom[sample_index,"Churn"])))
+```
+
+```{r}
+telecom_pca_test <- as.data.frame(cbind(telecom_prin_comp[-sample_index,],as.character(telecom[-sample_index,"Churn"])))
+```
+
+```{r}
+colnames(telecom_pca_train) <- c("Dim.1","Dim.2","Dim.3","Churn")
+
+telecom_pca_train$Dim.1 <- as.numeric(telecom_pca_train$Dim.1)
+telecom_pca_train$Dim.2 <- as.numeric(telecom_pca_train$Dim.2)
+telecom_pca_train$Dim.3 <- as.numeric(telecom_pca_train$Dim.3)
+```
+
+```{r}
+colnames(telecom_pca_test) <- c("Dim.1","Dim.2","Dim.3","Churn")
+
+telecom_pca_test$Dim.1 <- as.numeric(telecom_pca_test$Dim.1)
+telecom_pca_test$Dim.2 <- as.numeric(telecom_pca_test$Dim.2)
+telecom_pca_test$Dim.3 <- as.numeric(telecom_pca_test$Dim.3)
+```
 
 
+
+```{r}
+head(telecom_pca_train)
+```
+
+```{r}
+head(telecom_pca_test)
+```
+
+# Not Req
+
+```{r}
+svm_model_pca<-svm(Churn ~ ., data=telecom_pca_train, type="C-classification", kernel="linear")
+```
+
+```{r}
+svm_pred_train_pca<- predict(svm_model_pca, telecom_pca_train)
+MR.svm.pca<-mean(telecom_pca_train$Churn!=svm_pred_train_pca)
+```
+
+```{r}
+MR.svm.pca
+```
+
+
+
+```{r}
+svm_pred_test_pca<- predict(svm_model_pca, telecom_pca_test)
+MR.svm.pca.test<-mean(telecom_pca_test$Churn!=svm_pred_test_pca)
+```
+```{r}
+MR.svm.pca.test
+```
+
+
+```{r}
+str(telecom_pca_train)
+
+
+```
+
+```{r}
+str(telecom_pca_test)
+```
+```{r}
+svm_model_pca_opt<-svm(Churn ~ ., data=telecom_pca_train, type="C-classification", kernel="linear",cost=0.1,gamma = 0.1,coef0 = 0.1)
+```
+
+```{r}
+svm_pred_train_pca_opt<- predict(svm_model_pca_opt, telecom_pca_train)
+MR.svm.pca.opt<-mean(telecom_pca_train$Churn!=svm_pred_train_pca_opt)
+```
+
+```{r}
+MR.svm.pca.opt
+```
 

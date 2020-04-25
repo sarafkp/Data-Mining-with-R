@@ -9,7 +9,7 @@ library(MASS)
 library(randomForest)
 library(party)
 
-telecom <- read.csv("D:/Personal Folder/Projects/telco-customer-churn/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+telecom <- read.csv("C:/Users/gundawade.p/OneDrive - Procter and Gamble/Documents/Spring 2020/Data Mining II/Project/Data-Mining-with-R/WA_Fn-UseC_-Telco-Customer-Churn.csv")
 
 head(telecom)
 
@@ -64,7 +64,7 @@ telecom$tenure <- NULL
 numeric.var <- sapply(telecom,is.numeric)
 
 corr.matrix <- cor(telecom[,numeric.var])
-corrplot(corr.matrix, main="\n\nCorrelation Plot for Numerical Variables",method = "circle")
+corrplot(corr.matrix, main="/n/nCorrelation Plot for Numerical Variables",method = "circle")
 
 library(corrplot)
 

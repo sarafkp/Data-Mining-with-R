@@ -1,0 +1,287 @@
+---
+title: "Customer Churn Analysis"
+author: "Kaustubh Saraf"
+date: "4/24/2020"
+output: html_document
+---
+
+
+```{r, warning=FALSE, message=FALSE}
+
+set.seed(1357)
+
+library(tidyverse) #used for data manipulation
+library(rmarkdown) #used for formatting the markdown file
+library(lubridate) #Used for manipulating dates
+library(dplyr) # for data wrangling
+library(ggplot2) # for plotting awesome graphics
+library(plotly) # for making the graphics interactive
+library(randomForest) # for bagging tree
+library(glmnet)
+library(caret)
+library(rpart) #used for classification trees
+library(rpart.plot) #used for plotting the trees
+library(ROCR) #used for evaluating tree performance
+```
+
+
+**Importing the dataset**
+```{r}
+telecom.raw <- read.csv("Cust_Churn_Telecom.csv")
+```
+
+
+**Data Inspection**
+```{r}
+str(telecom.raw)
+```
+
+The `SeniorCitizen` is stored as integer. Post investigating the unique values, its should be stored as factor.
+Similarly, `customerID` should not be a factor but stored as a string
+```{r}
+unique(telecom.raw$SeniorCitizen)
+length(unique(telecom.raw$tenure))
+
+telecom.raw$SeniorCitizen <- as.factor(telecom.raw$SeniorCitizen)
+telecom.raw$customerID <- as.character(telecom.raw$customerID)
+telecom.raw$tenure <- as.numeric(telecom.raw$tenure)
+```
+
+**Checking `null` values in all the columns**
+```{r}
+colSums(is.na(telecom.raw))
+```
+
+**Correlation across variables**
+```{r}
+tel.cor.check <- telecom.raw[!is.na(telecom.raw$TotalCharges),]
+
+corr.matrix <- cor(tel.cor.check[,c('MonthlyCharges','TotalCharges')])
+corr.matrix
+```
+There is high correlation in these two variables. Moving ahead, we will be using `MonthlyCharges` column and drop `TotalCharges`
+
+
+
+**The tenure column can be clubbed together to reduce the number of levels.**
+```{r}
+telecom.raw2 <- telecom.raw %>%
+  mutate(tenure.new = as.factor(case_when(tenure >= 0 & tenure < 12 ~ '0-12 Months',
+                                   tenure >= 12 & tenure < 24 ~ '12-24 Months',
+                                   tenure >= 24 & tenure < 36 ~ '24-36 Months',
+                                   tenure >= 36 & tenure < 48 ~ '36-48 Months',
+                                   tenure >= 48 & tenure < 60 ~ '48-60 Months',
+                                   TRUE ~ '>60 Months'))) %>% 
+  select(-c(tenure,TotalCharges))
+
+head(telecom.raw2)
+```
+
+
+
+**Checking the summary statistics**
+```{r}
+summary(telecom.raw2)
+```
+
+There are entries of `No Internet Connection` in columns like `OnlineSecurity`, `OnlineBackup`, `DeviceProtection`, `TechSupport`, `StreamingTV`, `StreamingMovies`. We will merge them with `No` to reduce unnecessary levels.
+
+
+
+```{r}
+factorrenames <- names(telecom.raw2[8:14])
+  
+telecom <- telecom.raw2 %>%
+        mutate_at(.vars=factorrenames,
+                  .funs=~recode_factor(., `No internet service`="No")) %>%
+        mutate_at(.vars="MultipleLines",
+                  .funs=~recode_factor(., `No phone service`="No"))
+  
+
+glimpse(telecom)
+```
+
+
+Distribution of Monthly Charges
+```{r}
+hist(telecom$MonthlyCharges, prob = T, col = "grey", breaks = 10, main = "Histogram of Monthly Charges", xlab = "Monthly Charges")
+```
+* There are high number of customers with monthly charges les sthan $ 30
+* At the same time, we can see that the number of customers in the buckets of monthly charges greater tha 70 is high and constant across buckets till $ 110
+
+
+Outlier in Monthly Charges
+```{r}
+boxplot(telecom$MonthlyCharges,main = "Boxplot : Monthly Charges")
+```
+There are no outliers in the monthly charges column
+
+
+## EDA
+
+**Analyzing Churn Rate across gender**
+```{r}
+ggplot(data = telecom,aes(gender,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Gender") +
+  ggtitle("Churn across Gender") +
+  labs(fill = 'Churn')
+```
+The total customers is slightky higher in the male bucket with slight increment in churned customers
+
+**Analyzing Churn Rate across age of the customer**
+```{r}
+ggplot(data = telecom,aes(SeniorCitizen,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Senior Citizen Type") +
+  ggtitle("Churn across Senior Citizen Variable") +
+  labs(fill = 'Churn')
+```
+The churn rate seems high in Senior Citizens even tough the number of customers in this bucket is pretty low
+
+**Analyzing Churn Rate across the payment methods**
+```{r}
+ggplot(data = telecom,aes(PaymentMethod,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Payment Method") +
+  ggtitle("Churn across Payment Method") +
+  labs(fill = 'Churn')
+```
+
+* The number of customers in each type of payment method is alsomst similar
+* There is high churn in customers with `Electronic Check` payment method
+
+
+# Modelling
+
+Changing the `Churn` values to 1 and 0
+```{r}
+telecom$churn <- ifelse(telecom$Churn=='Yes',1,0)
+
+telecom <- telecom %>% select(-c(Churn,customerID))
+```
+
+
+**Train and Test Datasets**
+```{r}
+sample_index<-sample(nrow(telecom),nrow(telecom)*0.9)
+telecom_train<-telecom[sample_index,]
+telecom_test<-telecom[-sample_index,]
+```
+
+
+
+## **Logistic regression**
+
+Model with all the variables
+```{r}
+fullmodel<-lm(churn~., data = telecom_train )
+summary(fullmodel)
+```
+
+Stepwise Regression
+```{r}
+nullmodel<-lm(churn~1, data = telecom_train )
+
+model_step_both<-step(nullmodel,
+                      scope=list(lower=nullmodel,upper=fullmodel),
+                      direction = 'forward')
+
+summary(model_step_both)
+```
+
+
+## LASSO variable selection
+```{r}
+telecom_train.X = as.matrix(select(telecom_train, -churn))
+telecom_test.X = as.matrix(select(telecom_test, -churn))
+telecom_train.Y = telecom_train[, "churn"]
+telecom_test.Y = telecom_test[, "churn"]
+
+
+credit.lasso<- glmnet(x=telecom_train.X, y=telecom_train.Y, family = "binomial")
+
+credit.lasso.cv<- cv.glmnet(x=credit.train.X, y=credit.train.Y, family = "binomial", 
+                            type.measure = "class")
+plot(credit.lasso.cv)
+credit.lasso.cv$lambda.min
+
+coef(credit.lasso.cv, s=credit.lasso.cv$lambda.min)
+```
+
+## Bagging - Bootstrap and Aggregating
+
+```{r}
+control <- trainControl( method = "cv", number = 10, summaryFunction = twoClassSummary,
+                         classProbs = TRUE, verboseIter = FALSE)
+```
+
+```{r}
+test_bag <- train(churn ~ ., data = telecom_train, method = 'treebag',
+                  trControl = control)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
