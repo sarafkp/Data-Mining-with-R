@@ -331,6 +331,7 @@ AUC.tree.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
 tree.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
 ```
 
+# K-S Chart 
 ```{r}
 ks=max(attr(perf,'y.values')[[1]]-attr(perf,'x.values')[[1]])
 plot(perf,main=paste0(' KS=',round(ks*100,1),'%'))
@@ -339,7 +340,19 @@ print(ks);
 ```
 
 
+K-S or Kolmogorov-Smirnov chart measures performance of classification models. More accurately, K-S is a measure of the degree of separation between the positive and negative distributions. The K-S is 100 if the scores partition the population into two separate groups in which one group contains all the positives and the other all the negatives. On the other hand, If the model cannot differentiate between positives and negatives, then it is as if the model selects cases randomly from the population. The K-S would be 0. In most classification models the K-S will fall between 0 and 100, and that the higher the value the better the model is at separating the positive from negative cases.
+
+
+
+# Lift Chart
 ```{r}
-plot(performance(pred_val, measure="lift", x.measure="rpp"), colorize=TRUE)
+pred = predict(telecom.tree, telecom.test, type = "prob")
+
+prediction.perf <-prediction(pred[,2],telecom.test$Churn)
+plot(performance(prediction.perf, measure="lift", x.measure="rpp"), colorize=TRUE)
 ```
+
+The lift chart shows how much more likely we are to receive positive responses than if we contact a random sample of customers. For example, by contacting only 10% of customers based on the predictive model we will reach 3 times as many respondents, as if we use no model.
+
+
 
