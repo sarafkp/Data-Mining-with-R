@@ -154,61 +154,84 @@ ggplot(data = telecom,aes(PaymentMethod,fill = (Churn))) +
 
 # Modelling
 
-Changing the `Churn` values to 1 and 0
+Removing the `customerID` from the dataset
 ```{r}
-telecom$churn <- ifelse(telecom$Churn=='Yes',1,0)
-
-telecom <- telecom %>% select(-c(Churn,customerID))
+telecom <- telecom %>% select(-customerID)
 ```
 
 
-**Train and Test Datasets**
+Splitting the data into training and test set with 90-10 split
 ```{r}
-sample_index<-sample(nrow(telecom),nrow(telecom)*0.9)
-telecom_train<-telecom[sample_index,]
-telecom_test<-telecom[-sample_index,]
+index <- sample(nrow(telecom))
+telecom.subset <- telecom[index,]
+row.num <- round(nrow(telecom.subset) * 0.9)
+
+telecom.train <- telecom.subset[1:row.num,]
+telecom.test <- telecom.subset[(row.num+1):nrow(telecom.subset),]
 ```
 
-
-
-**Logistic regression**
-
-Model with all the variables
+Defining the model eveluation parameters
 ```{r}
-fullmodel<-lm(churn~., data = telecom_train )
-summary(fullmodel)
+control <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = twoClassSummary, # This uses ROC as model eveluation parameter
+  classProbs = TRUE,
+  verboseIter = FALSE,
+  search = "grid",
+  savePredictions = TRUE
+)
 ```
 
-Stepwise Regression
+Fitting logistic regression model
 ```{r}
-nullmodel<-lm(churn~1, data = telecom_train )
+glm_model.telecom <- train(Churn ~ ., data = telecom.train,
+                   method="glm", 
+                   trControl = control)
 
-model_step_both<-step(nullmodel,
-                      scope=list(lower=nullmodel,upper=fullmodel),
-                      direction = 'forward')
-
-summary(model_step_both)
-```
-
-
-## LASSO variable selection
-```{r}
-telecom_train.X = as.matrix(select(telecom_train, -churn))
-telecom_test.X = as.matrix(select(telecom_test, -churn))
-telecom_train.Y = telecom_train[, "churn"]
-telecom_test.Y = telecom_test[, "churn"]
-
-
-credit.lasso<- glmnet(x=telecom_train.X, y=telecom_train.Y, family = "binomial")
-
-credit.lasso.cv<- cv.glmnet(x=credit.train.X, y=credit.train.Y, family = "binomial", 
-                            type.measure = "class")
-plot(credit.lasso.cv)
-credit.lasso.cv$lambda.min
-
-coef(credit.lasso.cv, s=credit.lasso.cv$lambda.min)
+summary(glm_model.telecom)
+glm_model.telecom
 ```
 
 
 
+Model Eveluation: Insample
+```{r}
+glm_pred <- predict(glm_model.telecom, newdata = telecom.test)
+
+
+glmcm <- confusionMatrix(glm_pred, test[["Churn"]])
+glmaccuracy <- glmcm$overall[c(1,3,4)]
+glmcm
+```
+
+
+```{r}
+pred.glm.train<- predict(glm_model.telecom)
+MR.glm<-mean(telecom.train$Churn!=pred.glm.train)
+
+
+pred <- prediction(pred.glm.train, pred.glm.train$Churn)
+
+pred <- prediction(as.numeric(pred.glm.train), as.numeric(telecom.train$Churn))
+
+perf <- performance(pred,"tpr","fpr")
+
+plot(perf,colorize=TRUE)
+
+```
+
+as.numeric(telecom.train$Churn)
+
+
+```{r}
+glmnet_model <- train(Churn ~ ., data = train,
+  metric = "ROC",
+  method = "glmnet",
+  trControl = control,
+  preProcess = c("center","scale")
+)
+
+plot(glmnet_model)
+```
 
