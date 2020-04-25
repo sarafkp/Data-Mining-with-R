@@ -1,0 +1,379 @@
+---
+title: "Customer Churn Analysis"
+author: "Kaustubh Saraf"
+date: "4/24/2020"
+output: html_document
+---
+
+
+```{r}
+
+set.seed(1357)
+
+library(tidyverse) #used for data manipulation
+library(rmarkdown) #used for formatting the markdown file
+library(lubridate) #Used for manipulating dates
+
+library(glmnet)
+library(caret)
+library(rpart) #used for classification trees
+library(rpart.plot) #used for plotting the trees
+library(ROCR) #used for evaluating tree performance
+```
+
+
+**Importing the dataset**
+```{r}
+telecom.raw <- read.csv("Cust_Churn_Telecom.csv")
+```
+
+
+**Data Inspection**
+```{r}
+str(telecom.raw)
+```
+
+The `SeniorCitizen` is stored as integer. Post investigating the unique values, its should be stored as factor.
+Similarly, `customerID` should not be a factor but stored as a string
+```{r}
+unique(telecom.raw$SeniorCitizen)
+length(unique(telecom.raw$tenure))
+
+telecom.raw$SeniorCitizen <- as.factor(telecom.raw$SeniorCitizen)
+telecom.raw$customerID <- as.character(telecom.raw$customerID)
+telecom.raw$tenure <- as.numeric(telecom.raw$tenure)
+```
+
+**Checking `null` values in all the columns**
+```{r}
+colSums(is.na(telecom.raw))
+```
+
+**Correlation across variables**
+```{r}
+tel.cor.check <- telecom.raw[!is.na(telecom.raw$TotalCharges),]
+
+corr.matrix <- cor(tel.cor.check[,c('MonthlyCharges','TotalCharges')])
+corr.matrix
+```
+There is high correlation in these two variables. Moving ahead, we will be using `MonthlyCharges` column and drop `TotalCharges`
+
+
+
+**The tenure column can be clubbed together to reduce the number of levels.**
+```{r}
+telecom.raw2 <- telecom.raw %>%
+  mutate(tenure.new = as.factor(case_when(tenure >= 0 & tenure < 12 ~ '0-12 Months',
+                                   tenure >= 12 & tenure < 24 ~ '12-24 Months',
+                                   tenure >= 24 & tenure < 36 ~ '24-36 Months',
+                                   tenure >= 36 & tenure < 48 ~ '36-48 Months',
+                                   tenure >= 48 & tenure < 60 ~ '48-60 Months',
+                                   TRUE ~ '>60 Months'))) %>% 
+  select(-c(tenure,TotalCharges))
+
+head(telecom.raw2)
+```
+
+
+
+**Checking the summary statistics**
+```{r}
+summary(telecom.raw2)
+```
+
+There are entries of `No Internet Connection` in columns like `OnlineSecurity`, `OnlineBackup`, `DeviceProtection`, `TechSupport`, `StreamingTV`, `StreamingMovies`. We will merge them with `No` to reduce unnecessary levels.
+
+
+
+```{r}
+factorrenames <- names(telecom.raw2[8:14])
+  
+telecom <- telecom.raw2 %>%
+        mutate_at(.vars=factorrenames,
+                  .funs=~recode_factor(., `No internet service`="No")) %>%
+        mutate_at(.vars="MultipleLines",
+                  .funs=~recode_factor(., `No phone service`="No"))
+  
+
+str(telecom)
+```
+
+
+Distribution of Monthly Charges
+```{r}
+hist(telecom$MonthlyCharges, prob = T, col = "grey", breaks = 10, main = "Histogram of Monthly Charges", xlab = "Monthly Charges")
+```
+* There are high number of customers with monthly charges les sthan $ 30
+* At the same time, we can see that the number of customers in the buckets of monthly charges greater tha 70 is high and constant across buckets till $ 110
+
+
+Outlier in Monthly Charges
+```{r}
+boxplot(telecom$MonthlyCharges,main = "Boxplot : Monthly Charges")
+```
+There are no outliers in the monthly charges column
+
+
+## EDA
+
+**Analyzing Churn Rate across gender**
+```{r}
+ggplot(data = telecom,aes(gender,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Gender") +
+  ggtitle("Churn across Gender") +
+  labs(fill = 'Churn')
+```
+The total customers is slightky higher in the male bucket with slight increment in churned customers
+
+**Analyzing Churn Rate across age of the customer**
+```{r}
+ggplot(data = telecom,aes(SeniorCitizen,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Senior Citizen Type") +
+  ggtitle("Churn across Senior Citizen Variable") +
+  labs(fill = 'Churn')
+```
+The churn rate seems high in Senior Citizens even tough the number of customers in this bucket is pretty low
+
+**Analyzing Churn Rate across the payment methods**
+```{r}
+ggplot(data = telecom,aes(PaymentMethod,fill = (Churn))) +
+  geom_bar(position = 'dodge') +
+  ylab("Number of Records") +
+  xlab("Payment Method") +
+  ggtitle("Churn across Payment Method") +
+  labs(fill = 'Churn')
+```
+
+* The number of customers in each type of payment method is alsomst similar
+* There is high churn in customers with `Electronic Check` payment method
+
+
+# Modelling
+
+Removing the `customerID` from the dataset
+```{r}
+telecom <- telecom %>% select(-customerID)
+```
+
+
+Splitting the data into training and test set with 80-20 split
+```{r}
+sample_index<-sample(nrow(telecom),nrow(telecom)*0.8)
+telecom.train<-telecom[sample_index,]
+telecom.test<-telecom[-sample_index,]
+```
+
+
+```{r}
+library(e1071)
+```
+
+```{r}
+svm_model<-svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear")
+```
+
+
+```{r}
+summary(svm_model)
+```
+
+```{r}
+svm_pred_train <- predict(svm_model, telecom.train)
+```
+
+```{r}
+mean(svm_pred_train == telecom.train$Churn)
+```
+
+```{r}
+svm_pred_test <- predict(svm_model,telecom.test)
+```
+
+
+```{r}
+mean(svm_pred_test == telecom.test$Churn)
+```
+
+# ROC Curve
+
+```{r}
+svm_pred_train<- predict(svm_model, telecom.train)
+MR.svm<-mean(telecom.train$Churn!=svm_pred_train)
+
+pred <- prediction(as.numeric(svm_pred_train), as.numeric(telecom.train$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.svm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+```{r}
+svm_pred_test<- predict(svm_model, telecom.test)
+MR.svm.test<-mean(telecom.test$Churn!=svm_pred_test)
+
+pred <- prediction(as.numeric(svm_pred_test), as.numeric(telecom.test$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.svm.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+```{r}
+tune.svm <-svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear",cost = 10) 
+```
+
+  
+```{r}
+tune_out <-
+tune.svm(as.factor(Churn) ~., data=telecom.train,
+type = "C-classification", kernel = "linear",
+cost = 10^(-1:2), gamma = c(0.1,1,10), coef0 = c(0.1,1,10))
+```
+
+
+
+```{r}
+tune_out$best.parameters$gamma
+```
+```{r}
+tune_out$best.parameters$coef0
+```
+```{r}
+tune_out$best.parameters$cost
+```
+
+```{r}
+
+
+svm_tune <- svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear",cost = 0.1,gamma =1,coef0 = 1) 
+
+```
+
+```{r}
+svm_tune_pred <- predict(svm_tune,telecom.train)
+```
+
+```{r}
+mean(telecom.train$Churn!=svm_tune_pred)
+```
+### Optimal SVM
+
+```{r}
+svm_optimal <- svm(Churn ~ ., data=telecom.train, type="C-classification", kernel="linear",cost = 0.1,gamma =1,coef0 = 1) 
+```
+
+```{r}
+svm_pred_test_opt<- predict(svm_optimal, telecom.test)
+MR.svm.test.opt<-mean(telecom.test$Churn!=svm_pred_test_opt)
+
+pred <- prediction(as.numeric(svm_pred_test_opt), as.numeric(telecom.test$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.svm.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+```{r}
+MR.svm.test.opt
+```
+
+```{r}
+library(FactoMineR)
+library(factoextra)
+```
+
+```{r}
+telecom_pca <- FAMD(telecom,ncp = 25,graph = FALSE,sup.var = 18)
+```
+
+
+```{r}
+fviz_screeplot(telecom_pca, ncp=25)
+```
+
+```{r}
+get_eigenvalue(telecom_pca)
+```
+
+```{r}
+telecom_prin_comp <- telecom_pca$ind$contrib[,1:3]
+```
+
+```{r}
+telecom_pca_train <- as.data.frame(cbind(telecom_prin_comp[sample_index,],as.character(telecom[sample_index,"Churn"])))
+```
+
+```{r}
+telecom_pca_test <- as.data.frame(cbind(telecom_prin_comp[-sample_index,],as.character(telecom[-sample_index,"Churn"])))
+```
+
+```{r}
+colnames(telecom_pca_train) <- c("Dim.1","Dim.2","Dim.3","Churn")
+
+telecom_pca_train$Dim.1 <- as.numeric(telecom_pca_train$Dim.1)
+telecom_pca_train$Dim.2 <- as.numeric(telecom_pca_train$Dim.2)
+telecom_pca_train$Dim.3 <- as.numeric(telecom_pca_train$Dim.3)
+```
+
+```{r}
+colnames(telecom_pca_test) <- c("Dim.1","Dim.2","Dim.3","Churn")
+
+telecom_pca_test$Dim.1 <- as.numeric(telecom_pca_test$Dim.1)
+telecom_pca_test$Dim.2 <- as.numeric(telecom_pca_test$Dim.2)
+telecom_pca_test$Dim.3 <- as.numeric(telecom_pca_test$Dim.3)
+```
+
+```{r}
+head(telecom_pca_train)
+```
+
+```{r}
+head(telecom_pca_test)
+```
+
+
+```{r}
+svm_model_pca<-svm(Churn ~ ., data=telecom_pca_train, type="C-classification", kernel="linear")
+```
+
+```{r}
+svm_pred_train_pca<- predict(svm_model_pca, telecom_pca_train)
+MR.svm.pca<-mean(telecom_pca_train$Churn!=svm_pred_train_pca)
+```
+
+```{r}
+MR.svm.pca
+```
+
+```{r}
+svm_pred_test_pca<- predict(svm_model_pca, telecom_pca_test)
+MR.svm.pca.test<-mean(telecom_pca_test$Churn!=svm_pred_test_pca)
+```
+```{r}
+MR.svm.pca.test
+```
+
+
+```{r}
+str(telecom_pca_train)
+
+
+```
+
+```{r}
+str(telecom_pca_test)
+```
+```{r}
+svm_model_pca_opt<-svm(Churn ~ ., data=telecom_pca_train, type="C-classification", kernel="linear",cost=0.1,gamma = 0.1,coef0 = 0.1)
+```
+
+```{r}
+svm_pred_train_pca_opt<- predict(svm_model_pca_opt, telecom_pca_train)
+MR.svm.pca.opt<-mean(telecom_pca_train$Churn!=svm_pred_train_pca_opt)
+```
+
+```{r}
+MR.svm.pca.opt
+```
+
