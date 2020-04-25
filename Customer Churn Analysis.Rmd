@@ -18,6 +18,7 @@ library(glmnet)
 library(caret)
 library(rpart) #used for classification trees
 library(rpart.plot) #used for plotting the trees
+library(rattle) #used for plotting trees
 library(ROCR) #used for evaluating tree performance
 ```
 
@@ -162,13 +163,20 @@ telecom <- telecom %>% select(-customerID)
 
 Splitting the data into training and test set with 80-20 split
 ```{r}
-index <- sample(nrow(telecom))
-telecom.subset <- telecom[index,]
-row.num <- round(nrow(telecom.subset) * 0.8)
-
-telecom.train <- telecom.subset[1:row.num,]
-telecom.test <- telecom.subset[(row.num+1):nrow(telecom.subset),]
+sample_index<-sample(nrow(telecom),nrow(telecom)*0.8)
+telecom.train<-telecom[sample_index,]
+telecom.test<-telecom[-sample_index,]
 ```
+
+```{r}
+#index <- sample(nrow(telecom))
+#telecom.subset <- telecom[index,]
+#row.num <- round(nrow(telecom.subset) * 0.8)
+
+#telecom.train <- telecom.subset[1:row.num,]
+#telecom.test <- telecom.subset[(row.num+1):nrow(telecom.subset),]
+```
+
 
 Defining the model eveluation parameters
 ```{r}
@@ -209,25 +217,129 @@ AUC.glm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
 Model Eveluation: Out of sample
 ```{r}
 pred.glm.test<- predict(glm_model.telecom,newdata = telecom.test)
+
+# Misclassification Rate
 MR.glm.out<-mean(telecom.test$Churn!=pred.glm.test)
 
+# AUC
 pred <- prediction(as.numeric(pred.glm.test), as.numeric(telecom.test$Churn))
 perf <- performance(pred,"tpr","fpr")
 plot(perf,colorize=TRUE)
-AUC.glm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+AUC.glm.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+
+# Confusion Metrics
+glm.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
 ```
 
-as.numeric(telecom.train$Churn)
 
-
+# LASSO Variable Selection
 ```{r}
-glmnet_model <- train(Churn ~ ., data = train,
+telecom.lasso <- train(Churn ~ ., data = telecom.train,
   metric = "ROC",
   method = "glmnet",
   trControl = control,
   preProcess = c("center","scale")
 )
 
-plot(glmnet_model)
+plot(telecom.lasso)
+```
+
+
+Get optimal value of alpha
+```{r}
+telecom.lasso$bestTune$alpha
+```
+
+Model Eveluation: Insample
+```{r}
+pred.lasso.train<- predict(telecom.lasso)
+MR.lasso<-mean(telecom.train$Churn!=pred.lasso.train)
+
+pred <- prediction(as.numeric(pred.lasso.train), as.numeric(telecom.train$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.lasso.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+Model Eveluation: Out of sample
+```{r}
+pred.lasso.test<- predict(telecom.lasso,newdata = telecom.test)
+
+# Misclassification Rate
+MR.lasso.out<-mean(telecom.test$Churn!=pred.lasso.test)
+
+# AUC
+pred <- prediction(as.numeric(pred.lasso.test), as.numeric(telecom.test$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.lasso.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+
+# Confusion Metrics
+lasso.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
+```
+
+
+(telecom.lasso)
+
+Extracting the variables and coeffecients from LASSO Regression
+```{r}
+#getting the coefficients of the final model
+coefficients <- coef(telecom.lasso$finalModel, telecom.lasso$bestTune$lambda)
+
+#create a list of the selected coefficients
+variables <- names(coefficients[which(coefficients != 0),])
+```
+
+# Classification Tree
+```{r}
+telecom.tree = train(Churn ~ ., data=telecom.train,
+                     metric = "ROC",
+                     method="rpart", 
+                  trControl = control)
+```
+
+```{r}
+fancyRpartPlot(telecom.tree$finalModel)
+```
+
+
+Model Eveluation: Insample
+```{r}
+pred.tree.train<- predict(telecom.tree)
+MR.tree<-mean(telecom.train$Churn!=pred.tree.train)
+
+pred <- prediction(as.numeric(pred.tree.train), as.numeric(telecom.train$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.tree.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+Model Eveluation: Out of sample
+```{r}
+pred.tree.test<- predict(telecom.tree,newdata = telecom.test)
+
+# Misclassification Rate
+MR.tree.out<-mean(telecom.test$Churn!=pred.tree.test)
+
+# AUC
+pred <- prediction(as.numeric(pred.tree.test), as.numeric(telecom.test$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.tree.outsample<-unlist(slot(performance(pred, "auc"), "y.values"))
+
+# Confusion Metrics
+tree.cm.out <- confusionMatrix(pred.glm.test, telecom.test[["Churn"]])
+```
+
+```{r}
+ks=max(attr(perf,'y.values')[[1]]-attr(perf,'x.values')[[1]])
+plot(perf,main=paste0(' KS=',round(ks*100,1),'%'))
+lines(x = c(0,1),y=c(0,1))
+print(ks);
+```
+
+
+```{r}
+plot(performance(pred_val, measure="lift", x.measure="rpp"), colorize=TRUE)
 ```
 
