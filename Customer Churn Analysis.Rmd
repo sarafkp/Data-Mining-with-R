@@ -160,11 +160,11 @@ telecom <- telecom %>% select(-customerID)
 ```
 
 
-Splitting the data into training and test set with 90-10 split
+Splitting the data into training and test set with 80-20 split
 ```{r}
 index <- sample(nrow(telecom))
 telecom.subset <- telecom[index,]
-row.num <- round(nrow(telecom.subset) * 0.9)
+row.num <- round(nrow(telecom.subset) * 0.8)
 
 telecom.train <- telecom.subset[1:row.num,]
 telecom.test <- telecom.subset[(row.num+1):nrow(telecom.subset),]
@@ -197,28 +197,24 @@ glm_model.telecom
 
 Model Eveluation: Insample
 ```{r}
-glm_pred <- predict(glm_model.telecom, newdata = telecom.test)
-
-
-glmcm <- confusionMatrix(glm_pred, test[["Churn"]])
-glmaccuracy <- glmcm$overall[c(1,3,4)]
-glmcm
-```
-
-
-```{r}
 pred.glm.train<- predict(glm_model.telecom)
 MR.glm<-mean(telecom.train$Churn!=pred.glm.train)
 
-
-pred <- prediction(pred.glm.train, pred.glm.train$Churn)
-
 pred <- prediction(as.numeric(pred.glm.train), as.numeric(telecom.train$Churn))
-
 perf <- performance(pred,"tpr","fpr")
-
 plot(perf,colorize=TRUE)
+AUC.glm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
+```
 
+Model Eveluation: Out of sample
+```{r}
+pred.glm.test<- predict(glm_model.telecom,newdata = telecom.test)
+MR.glm.out<-mean(telecom.test$Churn!=pred.glm.test)
+
+pred <- prediction(as.numeric(pred.glm.test), as.numeric(telecom.test$Churn))
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+AUC.glm.insample<-unlist(slot(performance(pred, "auc"), "y.values"))
 ```
 
 as.numeric(telecom.train$Churn)
