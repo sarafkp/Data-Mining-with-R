@@ -1,6 +1,6 @@
 ---
 title: "Customer Churn Analysis"
-author: "Kaustubh Saraf"
+author: "Kaustubh Saraf Pratik Gundawade"
 date: "4/24/2020"
 output: html_document
 ---
